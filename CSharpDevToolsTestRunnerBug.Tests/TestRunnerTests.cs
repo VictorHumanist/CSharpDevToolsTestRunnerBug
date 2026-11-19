@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using Xunit;
 using Xunit.Sdk;
 using Xunit.v3;
@@ -44,9 +45,8 @@ public class TestRunnerTests
 
     #region Long URL argument reporting
 
-    // Case numbers follow InlineData order in Test Explorer.
-    // In C# Dev Tools 1.16.3, Run All leaves cases 2 and 5 unchecked.
-    // Individual runs fail to match cases 1, 2, 4, and 5; cases 3 and 6 pass.
+    // These six rows reproduced the 1.16.3 truncation bug.
+    // They match successfully in 1.17.2 and remain as regression controls.
     [Theory]
     [InlineData("https://sample.example.com{1}/tutorial-navigator.html")] // Case 1: 53 characters.
     [InlineData("https://sample.example.com{1}{2}/tutorial-navigator.html")] // Case 2: 56 characters.
@@ -67,10 +67,109 @@ public class TestRunnerTests
     }
 
     #endregion
+
+    #region Empty and whitespace arguments
+
+    [Theory]
+    [InlineData(null)] // Case 1.
+    [InlineData("")] // Case 2.
+    [InlineData("   ")] // Case 3: three spaces, a different value from case 2.
+    public void Theory_EmptyAndWhitespaceArguments_Passes(string value)
+    {
+        // Arrange:
+        var expectedIsBlank = true;
+
+        // Act:
+        var actualIsBlank = string.IsNullOrWhiteSpace(value);
+
+        // Assert:
+        Assert.Equal(expectedIsBlank, actualIsBlank);
+    }
+
+    #endregion
+
+    #region URL schemes
+
+    [Theory]
+    [InlineData("//example.com/key.pem")] // Case 1.
+    [InlineData("https://example.com/key.pem")] // Case 2: preserve the scheme.
+    [InlineData("/key.pem?redirect=https://example.com")] // Case 3: control.
+    public void Theory_UrlSchemeArguments_Passes(string value)
+    {
+        // Arrange:
+        var expectedHasValue = true;
+
+        // Act:
+        var actualHasValue = !string.IsNullOrWhiteSpace(value);
+
+        // Assert:
+        Assert.Equal(expectedHasValue, actualHasValue);
+    }
+
+    #endregion
+
+    #region C# string literal representations
+
+    [Theory]
+    [InlineData("/path")] // Case 1.
+    [InlineData(@"/path\?")] // Case 2: verbatim source syntax is not part of the value.
+    public void Theory_VerbatimPathArguments_Passes(string from)
+    {
+        // Arrange:
+        var expectedHasValue = true;
+
+        // Act:
+        var actualHasValue = !string.IsNullOrWhiteSpace(from);
+
+        // Assert:
+        Assert.Equal(expectedHasValue, actualHasValue);
+    }
+
+    [Theory]
+    [InlineData("/(alpha|beta)/old", "/(alpha|beta)/new")] // Case 1.
+    [InlineData(@"/\(ignored\)/(alpha|beta)/old", "/(alpha|beta)/new")] // Case 2.
+    public void Theory_VerbatimRegexArguments_Passes(string from, string expectedFrom)
+    {
+        // Arrange:
+        var expectedHasValidSuffixes = true;
+
+        // Act:
+        var actualHasValidSuffixes = from.EndsWith("/old") && expectedFrom.EndsWith("/new");
+
+        // Assert:
+        Assert.Equal(expectedHasValidSuffixes, actualHasValidSuffixes);
+    }
+
+    #endregion
+
+    #region Colliding JSON display names
+
+    // Cases 3, 4, and 5 produce the same truncated runtime display name.
+    // Case 2 also exposes whitespace removal in the truncation matcher.
+    [Theory]
+    [InlineData("""{"type":"example.object.created","data":{"path":123,"user":{"id":"user"}}}""")] // Case 1.
+    [InlineData("""{"type":"example.object.created","data":{"path":" ","user":{"id":"user"}}}""")] // Case 2.
+    [InlineData("""{"type":"example.object.created","data":{"path":"/path","user":{"id":123}}}""")] // Case 3.
+    [InlineData("""{"type":"example.object.created","data":{"path":"/path","user":{"id":" "}}}""")] // Case 4.
+    [InlineData("""{"type":"example.object.created","data":{"path":"/path"}}""")] // Case 5.
+    public void Theory_JsonArgumentsWithSharedPrefix_Passes(string payload)
+    {
+        // Arrange:
+        var expectedType = "example.object.created";
+
+        // Act:
+        using var document = JsonDocument.Parse(payload);
+        var actualType = document.RootElement.GetProperty("type").GetString();
+
+        // Assert:
+        Assert.Equal(expectedType, actualType);
+    }
+
+    #endregion
 }
 
-// Replays the original result arrival order, making the incorrect row-order
-// fallback deterministic. This does not skip tests or change display names.
+// Preserves the earlier URL regression's result arrival order.
+// All other cases retain their discovery order; every assertion passes.
 public class UrlCaseOrderer : ITestCaseOrderer
 {
     public IReadOnlyCollection<TTestCase> OrderTestCases<TTestCase>(IReadOnlyCollection<TTestCase> testCases)
